@@ -1,18 +1,58 @@
 import { z } from 'zod';
+import { fail } from "@sveltejs/kit"
 import type { RequestEvent } from '@sveltejs/kit';
+import type { Actions } from './$types';
 
-
+// NOTE All data and errors, etc. are accessed via 'form' in frontend.
 // NOTE If it's not defined/validated inside your Schema,
 // then Zod will strip out the missing fields from the result object
+// NOTE You can handle errors and display to user with some Zod helpers
+// We have access to formErrors: [] and fieldErrors: {...}
+// REF: https://zod.dev/ERROR_HANDLING
+// NOTE To validate that the password and passwordConfirm match,
+// Zod has superRefine(val, ctx).
 const registerSchema = z.object({
-  name: z.string().min(1).max(64).trim(),
-  email: z.string().min(1).max(64).email(),
-  password: z.string().min(6).max(32).trim(),
-  passwordConfirm: z.string().min(6).max(32).trim(),
-  terms: z.enum(['on']),
+  name: z
+    .string({ required_error: 'Name is required' })
+    .min(1, { message: 'Name is required' })
+    .max(64, { message: 'Name must be less than 64 characters' })
+    .trim(),
+  email: z
+    .string({ required_error: 'Email is required' })
+    .min(1, { message: 'Email is required' })
+    .max(64, { message: 'Email must be less than 64 characters' })
+    .email({ message: 'Email must be a valid email address' }),
+  password: z
+    .string({ required_error: 'Password is required' })
+    .min(6, { message: 'Password must be at least 6 characters' })
+    .max(32, { message: 'Password must be less than 32 characters' })
+    .trim(),
+  passwordConfirm: z
+    .string({ required_error: 'Password is required' })
+    .min(6, { message: 'Password must be at least 6 characters' })
+    .max(32, { message: 'Password must be less than 32 characters' })
+    .trim(),
+  terms: z.enum(['on'], { required_error: 'You must accept the terms and conditions' })
 })
+  .superRefine(({ password, passwordConfirm }, ctx) => {
+    // NOTE We add new Zod issues to its context
+  // Then these error messages will be availabe in our ActionData ('form')
+    if (passwordConfirm !== password) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Passwords must match',
+        path: ['password']
+      });
 
-export const actions = {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Passwords must match',
+        path: ['passwordConfirm']
+      })
+    }
+  });
+
+export const actions: Actions = {
   default: async ({ request }: RequestEvent) => {
     const formData = Object.fromEntries(await request.formData());
     console.log(formData);
@@ -24,8 +64,22 @@ export const actions = {
       console.log('SUCCESS');
       console.log(result);
 
-    } catch (error) {
-      console.log(error);
+    } catch (error: any) {
+      // NOTE Use Zod's error.flatten() helper to access formErrors & fieldErrors
+      // This allows us to make these accessible from the client.
+      // console.log(error.flatten()); // { formErrors: [], fieldErrors: { k: ['v']}}
+      const { fieldErrors } = error.flatten();
+
+      // Now, let's send back error details to user but STRIP OUT password!
+      // NOTE We're going to return and populate all the original formData
+      // values they entered except passwords. Here's how to strip out:
+      const { password, passwordConfirm, ...rest } = formData;
+      // Q: Do we use fail() (used to be invalid()) to return?
+      // A: Yep! 
+      return fail(400, {
+        data: rest,
+        errors: fieldErrors,
+      })
     }
 
     // Next, we can use this validated object to add to DB,
@@ -34,7 +88,6 @@ export const actions = {
     return {
       success: true
     }
-
 
   }
 }
